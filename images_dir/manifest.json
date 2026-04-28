@@ -1,0 +1,26 @@
+{
+  "name": "GALLERY DOT — AFTER IMAGE",
+  "short_name": "GALLERY DOT",
+  "description": "GALLERY DOT 10周年記念展「AFTER IMAGE — 10年の残像。」",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#111216",
+  "theme_color": "#111216",
+  "icons": [
+    {
+      "src": "favicon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
