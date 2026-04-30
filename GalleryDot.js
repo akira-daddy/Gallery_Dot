@@ -9,9 +9,12 @@
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   /* ------------------------------------------------
-     1. INVENTORY DATA (dummy — replace with API)
+     1. INVENTORY DATA
+        - inventoryData はミュータブルなオブジェクト。
+        - GASから最新データを取得できた場合はそちらで上書き。
+        - 取得失敗時はここのフォールバック値を使用。
      ------------------------------------------------ */
-  const inventoryData = {
+  let inventoryData = {
     '2026-01-10': 38, '2026-01-11': 32, '2026-01-12': 25,
     '2026-01-13': 40, '2026-01-14': 18, '2026-01-15': 9,
     '2026-01-16': 40, '2026-01-17': 7,  '2026-01-18': 3,
@@ -20,14 +23,64 @@
     '2026-01-25': 1,  '2026-01-26': 40
   };
 
-  // Closed days (Tuesdays during exhibition period)
+  // 休廊日（火曜）
   const closedDays = ['2026-01-13', '2026-01-20'];
+  const closedSet  = new Set(closedDays);
 
-  // Day-of-week labels
-  const DOW = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+  // 1日あたり最大配布数
+  const MAX_PER_DAY = 40;
+
+  // 曜日ラベル
+  const DOW    = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+  const DOW_JP = ['日','月','火','水','木','金','土'];
 
   /* ------------------------------------------------
-     2. STOCK COLOR HELPER
+     GAS エンドポイント（1箇所で管理）
+     ------------------------------------------------ */
+  // ▼▼▼ ここにGASのウェブアプリURLを貼り付け ▼▼▼
+  const GAS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwNgp-j4prd3Cz1SS2yYnC6hp46V-zo6RfdH0Afl_UprYqHLLt2u_xHzj7Zvh6hJ1kl/exec';
+  // ▲▲▲ ここにGASのウェブアプリURLを貼り付け ▲▲▲
+
+  /* ================================================
+     2. INVENTORY — GASから最新残数を取得
+        GAS側で GET リクエストに対して
+        { inventory: { "2026-01-10": 38, ... } }
+        の形式の JSON を返すよう実装してください。
+        取得できない場合はフォールバック値をそのまま使います。
+     ================================================ */
+  async function fetchInventoryFromGAS() {
+    try {
+      const res = await fetch(`${GAS_ENDPOINT}?action=getInventory`, {
+        method: 'GET',
+        mode: 'cors',
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data && data.inventory && typeof data.inventory === 'object') {
+        // 取得成功 → inventoryData を最新値で上書き
+        Object.assign(inventoryData, data.inventory);
+        return true;
+      }
+    } catch (e) {
+      // 取得失敗はサイレントに無視し、フォールバック値を使用
+      console.warn('[Inventory] GASからの在庫取得に失敗しました。フォールバック値を使用します。', e);
+    }
+    return false;
+  }
+
+  /* ================================================
+     3. INVENTORY — 予約成功後にローカル在庫を減算して再描画
+     ================================================ */
+  function decrementInventory(dateKey, numPeople) {
+    if (!(dateKey in inventoryData)) return;
+    inventoryData[dateKey] = Math.max(0, inventoryData[dateKey] - numPeople);
+    // カレンダーと当日ウィジェットを再描画
+    rerenderCalendar();
+    renderTodayStock();
+  }
+
+  /* ------------------------------------------------
+     4. STOCK COLOR HELPER
      ------------------------------------------------ */
   function getStockClass(count) {
     if (count <= 0)  return 'stock-zero';
@@ -37,23 +90,18 @@
   }
 
   /* ------------------------------------------------
-     3. RENDER CALENDAR
+     5. CALENDAR — 描画 / 再描画
      ------------------------------------------------ */
-  function renderCalendar() {
-    const calendarEl = document.getElementById('calendar');
-    if (!calendarEl) return;
-
-    const frag = document.createDocumentFragment();
-
-    // Sort dates ascending
+  function buildCalendarFragment() {
+    const frag  = document.createDocumentFragment();
     const dates = Object.keys(inventoryData).sort();
 
     dates.forEach(dateStr => {
       const [year, month, day] = dateStr.split('-').map(Number);
-      const d = new Date(year, month - 1, day);
-      const dow = DOW[d.getDay()];
-      const count = inventoryData[dateStr];
-      const isClosed = closedDays.includes(dateStr);
+      const d        = new Date(year, month - 1, day);
+      const dow      = DOW[d.getDay()];
+      const count    = inventoryData[dateStr];
+      const isClosed = closedSet.has(dateStr);
 
       const cell = document.createElement('div');
       cell.className = 'cal-cell';
@@ -71,9 +119,7 @@
         cell.setAttribute('aria-label', `${month}月${day}日 休廊`);
       } else {
         cell.classList.add(getStockClass(count));
-        const warning = count > 0 && count <= 10
-          ? '<div class="cal-warning">残りわずか</div>'
-          : '';
+        const warning   = count > 0 && count <= 10 ? '<div class="cal-warning">残りわずか</div>' : '';
         const stockText = count > 0 ? `残 ${count}` : '完売';
         cell.innerHTML = `
           <div>
@@ -91,40 +137,52 @@
       frag.appendChild(cell);
     });
 
-    calendarEl.appendChild(frag);
+    return frag;
+  }
+
+  function renderCalendar() {
+    const calendarEl = document.getElementById('calendar');
+    if (!calendarEl) return;
+    calendarEl.appendChild(buildCalendarFragment());
+  }
+
+  // 再描画用（既存セルをクリアして建て直す）
+  function rerenderCalendar() {
+    const calendarEl = document.getElementById('calendar');
+    if (!calendarEl) return;
+    calendarEl.innerHTML = '';
+    calendarEl.appendChild(buildCalendarFragment());
   }
 
   /* ------------------------------------------------
-     4. TODAY'S STOCK WIDGET
+     6. TODAY'S STOCK WIDGET
      ------------------------------------------------ */
   function renderTodayStock() {
-    const numEl = document.getElementById('todayStockNum');
-    const barFill = document.getElementById('todayStockBarFill');
+    const numEl     = document.getElementById('todayStockNum');
+    const barFill   = document.getElementById('todayStockBarFill');
     const stickyNum = document.getElementById('stickyStockNum');
     if (!numEl) return;
 
-    // For the LP preview, pick today's date if within range, else pick the first active day
-    const today = new Date();
-    const pad = n => String(n).padStart(2, '0');
+    const today    = new Date();
+    const pad      = n => String(n).padStart(2, '0');
     const todayKey = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
 
     let displayKey = todayKey;
-    if (!(todayKey in inventoryData) || closedDays.includes(todayKey)) {
-      // fallback: first non-closed day
-      displayKey = Object.keys(inventoryData).sort().find(k => !closedDays.includes(k));
+    if (!(todayKey in inventoryData) || closedSet.has(todayKey)) {
+      displayKey = Object.keys(inventoryData).sort().find(k => !closedSet.has(k));
     }
 
-    const count = inventoryData[displayKey] || 0;
-    const max = 40;
+    const count = inventoryData[displayKey] ?? 0;
 
-    numEl.textContent = `${count} / ${max}`;
+    numEl.textContent = `${count} / ${MAX_PER_DAY}`;
     numEl.style.color =
       count <= 10 ? '#7DD3F0' :
       count <= 20 ? '#3AA7C9' :
       '#1E6B86';
 
     if (barFill) {
-      barFill.style.width = `${Math.max(0, Math.min(100, (count / max) * 100))}%`;
+      const pct = Math.max(0, Math.min(100, (count / MAX_PER_DAY) * 100));
+      barFill.style.width      = `${pct}%`;
       barFill.style.background =
         count <= 10 ? '#7DD3F0' :
         count <= 20 ? '#3AA7C9' :
@@ -135,22 +193,18 @@
   }
 
   /* ------------------------------------------------
-     5. STICKY CTA: show after hero leaves viewport
+     7. STICKY CTA
      ------------------------------------------------ */
   function initStickyCTA() {
-    const hero = document.getElementById('hero');
+    const hero      = document.getElementById('hero');
     const stickyBar = document.getElementById('sticky-cta');
     if (!hero || !stickyBar) return;
 
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting) {
-          stickyBar.classList.remove('is-visible');
-          stickyBar.setAttribute('aria-hidden', 'true');
-        } else {
-          stickyBar.classList.add('is-visible');
-          stickyBar.setAttribute('aria-hidden', 'false');
-        }
+        const visible = !entry.isIntersecting;
+        stickyBar.classList.toggle('is-visible', visible);
+        stickyBar.setAttribute('aria-hidden', String(!visible));
       },
       { threshold: 0, rootMargin: '-64px 0px 0px 0px' }
     );
@@ -159,7 +213,7 @@
   }
 
   /* ------------------------------------------------
-     6. SMOOTH SCROLL
+     8. SMOOTH SCROLL
      ------------------------------------------------ */
   function initSmoothScroll() {
     document.querySelectorAll('a[href^="#"]').forEach(anchor => {
@@ -178,7 +232,7 @@
   }
 
   /* ------------------------------------------------
-     7. SCROLL REVEAL ANIMATIONS
+     9. SCROLL REVEAL ANIMATIONS
      ------------------------------------------------ */
   function initScrollReveal() {
     const items = document.querySelectorAll('[data-animate]');
@@ -205,12 +259,11 @@
   }
 
   /* ------------------------------------------------
-     8. CONCEPT MARQUEE — click/tap to pause, auto-resume after 2s
+     10. CONCEPT MARQUEE
      ------------------------------------------------ */
   function initMarqueePause() {
     const track = document.querySelector('.concept-marquee-track');
-    if (!track) return;
-    if (prefersReducedMotion) return; // marquee is already static for reduced-motion users
+    if (!track || prefersReducedMotion) return;
 
     const RESUME_DELAY = 2000;
     let resumeTimer = null;
@@ -224,74 +277,72 @@
       }, RESUME_DELAY);
     };
 
-    // Delegate click on any marquee item
-    const items = track.querySelectorAll('.concept-marquee-item');
-    items.forEach(item => {
-      // Click covers mouse + most touch (synthesised)
+    track.querySelectorAll('.concept-marquee-item').forEach(item => {
       item.addEventListener('click', pauseAndScheduleResume);
-      // Touchstart for immediate feedback on mobile before click fires
       item.addEventListener('touchstart', pauseAndScheduleResume, { passive: true });
     });
   }
 
   /* ------------------------------------------------
-     9. RESERVATION MODAL + GAS SUBMISSION
+     11. RESERVATION MODAL + FORM SUBMIT
      ------------------------------------------------ */
   function initReservationModal() {
-    // ▼▼▼ ここにGASのウェブアプリURLを貼り付け ▼▼▼
-    const GAS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwNgp-j4prd3Cz1SS2yYnC6hp46V-zo6RfdH0Afl_UprYqHLLt2u_xHzj7Zvh6hJ1kl/exec';
-    // ▲▲▲ ここにGASのウェブアプリURLを貼り付け ▲▲▲
-
-    const modal = document.getElementById('reservationModal');
-    const form = document.getElementById('reservationForm');
-    const statusEl = document.getElementById('rsvStatus');
+    const modal      = document.getElementById('reservationModal');
+    const form       = document.getElementById('reservationForm');
+    const statusEl   = document.getElementById('rsvStatus');
     const dateSelect = document.getElementById('rsv-date');
     if (!modal || !form) return;
 
-    // 来場日の選択肢を動的生成（休廊日は除外）
-    const allDates = Object.keys(inventoryData).sort();
-    const closedSet = new Set(closedDays);
-    allDates.forEach(key => {
-      if (closedSet.has(key)) return;
-      const [y, m, d] = key.split('-').map(Number);
-      const dow = ['日','月','火','水','木','金','土'][new Date(y, m-1, d).getDay()];
-      const opt = document.createElement('option');
-      opt.value = key;
-      opt.textContent = `${m}/${d}(${dow})`;
-      dateSelect.appendChild(opt);
-    });
+    // 来場日の選択肢を動的生成（休廊日は除外・完売は disabled）
+    function populateDateSelect() {
+      // 「選択してください」以外を一度クリア
+      Array.from(dateSelect.options).forEach(o => {
+        if (o.value !== '') dateSelect.removeChild(o);
+      });
+      Object.keys(inventoryData).sort().forEach(key => {
+        if (closedSet.has(key)) return;
+        const [y, m, d] = key.split('-').map(Number);
+        const dow = DOW_JP[new Date(y, m - 1, d).getDay()];
+        const remaining = inventoryData[key];
+        const opt = document.createElement('option');
+        opt.value = key;
+        if (remaining <= 0) {
+          opt.textContent = `${m}/${d}(${dow}) — 完売`;
+          opt.disabled = true;
+        } else {
+          opt.textContent = `${m}/${d}(${dow})`;
+        }
+        dateSelect.appendChild(opt);
+      });
+    }
+    populateDateSelect();
 
-    // ==============================
-    //   VALIDATION
-    // ==============================
+    /* ---- VALIDATION ---- */
     const validators = {
       name: value => {
         if (!value || value.trim() === '') return 'お名前を入力してください';
-        if (value.trim().length < 2) return 'お名前は2文字以上で入力してください';
-        if (value.length > 50) return 'お名前は50文字以内で入力してください';
+        if (value.trim().length < 2)        return 'お名前は2文字以上で入力してください';
+        if (value.length > 50)              return 'お名前は50文字以内で入力してください';
         return '';
       },
       email: value => {
         if (!value || value.trim() === '') return 'メールアドレスを入力してください';
-        // RFC 5322 簡略版。日常的に通用するメール形式を検証
         const emailRe = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
-        if (!emailRe.test(value.trim())) return 'メールアドレスの形式が正しくありません';
-        if (value.length > 100) return 'メールアドレスが長すぎます';
+        if (!emailRe.test(value.trim()))   return 'メールアドレスの形式が正しくありません';
+        if (value.length > 100)            return 'メールアドレスが長すぎます';
         return '';
       },
       phone: value => {
-        // 任意項目。入力がある場合のみ検証
         if (!value || value.trim() === '') return '';
-        // ハイフン・括弧・スペースを除去した数字のみを検証
         const digits = value.replace(/[\s\-\(\)\+]/g, '');
-        if (!/^\d+$/.test(digits)) return '電話番号は数字で入力してください';
+        if (!/^\d+$/.test(digits))              return '電話番号は数字で入力してください';
         if (digits.length < 10 || digits.length > 13) return '電話番号の桁数が正しくありません';
         return '';
       },
       visitDate: value => {
-        if (!value) return '来場日を選択してください';
+        if (!value)                    return '来場日を選択してください';
         if (!(value in inventoryData)) return '選択された日付は無効です';
-        if (closedSet.has(value)) return 'この日は休廊日です';
+        if (closedSet.has(value))      return 'この日は休廊日です';
         if (inventoryData[value] <= 0) return 'この日は予約枠が満席です';
         return '';
       },
@@ -306,50 +357,38 @@
         return '';
       },
       note: value => {
-        // 任意項目。文字数だけチェック
         if (value && value.length > 500) return '備考は500文字以内で入力してください';
         return '';
       }
     };
 
-    // 各フィールドにエラー表示要素を挿入
+    // エラー表示要素を挿入
     Object.keys(validators).forEach(fieldName => {
       const input = form.querySelector(`[name="${fieldName}"]`);
       if (!input) return;
       const field = input.closest('.rsv-field');
-      if (!field) return;
-      if (!field.querySelector('.rsv-field-error')) {
-        const errorEl = document.createElement('p');
-        errorEl.className = 'rsv-field-error';
-        errorEl.setAttribute('aria-live', 'polite');
-        errorEl.dataset.errorFor = fieldName;
-        field.appendChild(errorEl);
-      }
+      if (!field || field.querySelector('.rsv-field-error')) return;
+      const errorEl = document.createElement('p');
+      errorEl.className = 'rsv-field-error';
+      errorEl.setAttribute('aria-live', 'polite');
+      errorEl.dataset.errorFor = fieldName;
+      field.appendChild(errorEl);
     });
 
-    // 単一フィールドを検証して状態を描画
     function validateField(fieldName, showError = true) {
       const input = form.querySelector(`[name="${fieldName}"]`);
       if (!input || !validators[fieldName]) return true;
-      const field = input.closest('.rsv-field');
+      const field   = input.closest('.rsv-field');
       const errorEl = field.querySelector('.rsv-field-error');
       const message = validators[fieldName](input.value);
-
       if (showError) {
-        if (message) {
-          field.classList.add('has-error');
-          input.setAttribute('aria-invalid', 'true');
-          if (errorEl) errorEl.textContent = message;
-        } else {
-          field.classList.remove('has-error');
-          input.removeAttribute('aria-invalid');
-          if (errorEl) errorEl.textContent = '';
-        }
+        field.classList.toggle('has-error', !!message);
+        input.toggleAttribute('aria-invalid', !!message);
+        if (errorEl) errorEl.textContent = message;
       }
       return message === '';
     }
 
-    // 全フィールドを検証
     function validateAll() {
       let firstInvalid = null;
       Object.keys(validators).forEach(fieldName => {
@@ -361,94 +400,73 @@
       return firstInvalid;
     }
 
-    // リアルタイム検証: blur時にエラー表示、input時にエラー解除（ユーザーが修正中は干渉しない）
+    // リアルタイム検証
     Object.keys(validators).forEach(fieldName => {
       const input = form.querySelector(`[name="${fieldName}"]`);
       if (!input) return;
-      input.addEventListener('blur', () => validateField(fieldName, true));
+      input.addEventListener('blur',  () => validateField(fieldName, true));
       input.addEventListener('input', () => {
-        const field = input.closest('.rsv-field');
-        if (field.classList.contains('has-error')) {
-          // 既にエラー表示中の場合のみ、入力中に再検証して素早く解除
+        if (input.closest('.rsv-field').classList.contains('has-error')) {
           validateField(fieldName, true);
         }
       });
-      // selectはchangeイベントの方が反応が良い
       if (input.tagName === 'SELECT') {
         input.addEventListener('change', () => validateField(fieldName, true));
       }
     });
 
-    // ==============================
-    //   MODAL OPEN/CLOSE
-    // ==============================
-    const openTriggers = document.querySelectorAll('[data-open-modal="reservation"], a[href="#reservation-form"]');
-    openTriggers.forEach(el => {
-      el.addEventListener('click', e => {
-        e.preventDefault();
-        openModal();
+    /* ---- MODAL OPEN/CLOSE ---- */
+    document.querySelectorAll('[data-open-modal="reservation"], a[href="#reservation-form"]')
+      .forEach(el => {
+        el.addEventListener('click', e => { e.preventDefault(); openModal(); });
       });
-    });
 
     function openModal() {
       modal.classList.add('is-open');
       modal.setAttribute('aria-hidden', 'false');
       document.body.classList.add('modal-open');
-      // スマホの戻るボタン対策：モーダルを開いたら履歴を1件積む
       history.pushState({ modalOpen: true }, '');
       setTimeout(() => {
         const first = form.querySelector('input, select');
         if (first) first.focus();
       }, 300);
     }
+
     function closeModal() {
       modal.classList.remove('is-open');
       modal.setAttribute('aria-hidden', 'true');
       document.body.classList.remove('modal-open');
-      // 閉じる際にエラー状態もクリア
       form.querySelectorAll('.rsv-field.has-error').forEach(f => f.classList.remove('has-error'));
       form.querySelectorAll('.rsv-field-error').forEach(e => e.textContent = '');
       statusEl.textContent = '';
-      statusEl.className = 'rsv-status';
+      statusEl.className   = 'rsv-status';
     }
 
-    // スマホの戻るボタン（popstate）でモーダルを閉じる
-    window.addEventListener('popstate', e => {
-      if (modal.classList.contains('is-open')) {
-        closeModal();
-      }
+    window.addEventListener('popstate', () => {
+      if (modal.classList.contains('is-open')) closeModal();
     });
 
     modal.querySelectorAll('[data-modal-close]').forEach(el => {
-      el.addEventListener('click', e => {
-        // × ボタン・背景タップで閉じた場合は履歴も1件戻す
-        if (history.state && history.state.modalOpen) {
-          history.back();
-        } else {
-          closeModal();
-        }
+      el.addEventListener('click', () => {
+        if (history.state && history.state.modalOpen) history.back();
+        else closeModal();
       });
     });
+
     document.addEventListener('keydown', e => {
       if (e.key === 'Escape' && modal.classList.contains('is-open')) {
-        if (history.state && history.state.modalOpen) {
-          history.back();
-        } else {
-          closeModal();
-        }
+        if (history.state && history.state.modalOpen) history.back();
+        else closeModal();
       }
     });
 
-    // ==============================
-    //   FORM SUBMIT
-    // ==============================
+    /* ---- FORM SUBMIT ---- */
     form.addEventListener('submit', async e => {
       e.preventDefault();
       const submitBtn = form.querySelector('.rsv-submit');
       statusEl.textContent = '';
-      statusEl.className = 'rsv-status';
+      statusEl.className   = 'rsv-status';
 
-      // バリデーション
       const firstInvalid = validateAll();
       if (firstInvalid) {
         statusEl.textContent = '入力内容に誤りがあります。赤字の項目を確認してください。';
@@ -459,35 +477,40 @@
       }
 
       const formData = new FormData(form);
-      const payload = {};
+      const payload  = {};
       formData.forEach((v, k) => { payload[k] = typeof v === 'string' ? v.trim() : v; });
 
-      submitBtn.disabled = true;
+      // 送信前に選択日・人数を取得しておく
+      const selectedDate   = payload.visitDate;
+      const selectedPeople = Math.max(1, parseInt(payload.people, 10) || 1);
+
+      submitBtn.disabled    = true;
       submitBtn.textContent = '送信中...';
 
       try {
-        // GAS の /exec は POST を受け取ると 302 リダイレクトを返す。
-        // mode:'cors' + redirect:'follow' だとブラウザがリダイレクト先を
-        // opaque リソースと判断して "Failed to fetch" になるため、
-        // no-cors で送信し、レスポンス本文は読まずに「送信完了」とみなす。
         await fetch(GAS_ENDPOINT, {
-          method: 'POST',
-          mode: 'no-cors',
+          method:  'POST',
+          mode:    'no-cors',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify(payload),
+          body:    JSON.stringify(payload),
         });
 
-        // no-cors では res.ok / res.status が読めないが、
-        // fetch が例外を投げなければネットワーク送信は成功している。
+        // ────────────────────────────────────────────────
+        //  送信成功後:
+        //  1. ローカル在庫を予約人数分だけ即座に減算
+        //  2. カレンダー・当日ウィジェット・日付セレクトを再描画
+        // ────────────────────────────────────────────────
+        decrementInventory(selectedDate, selectedPeople);
+        populateDateSelect(); // 完売になった日を disabled に更新
+
         statusEl.textContent = 'ご予約を受け付けました。確認メールをお送りしました。';
         statusEl.classList.add('is-success');
         form.reset();
         setTimeout(closeModal, 4000);
+
       } catch (err) {
-        // ネットワーク層のエラー（オフライン等）
         console.error('[Reservation] submit error:', err);
-        const errMsg = err && err.message ? err.message : 'ネットワークエラーが発生しました。';
-        statusEl.textContent = `送信に失敗しました: ${errMsg}`;
+        statusEl.textContent = `送信に失敗しました: ${err?.message ?? 'ネットワークエラーが発生しました。'}`;
         statusEl.classList.add('is-error');
       } finally {
         submitBtn.disabled = false;
@@ -496,10 +519,14 @@
     });
   }
 
-  /* ------------------------------------------------
+  /* ================================================
      INIT
-     ------------------------------------------------ */
-  function init() {
+     ================================================ */
+  async function init() {
+    // GASから最新在庫を取得してからカレンダーを描画
+    // （取得失敗時はフォールバック値でそのまま描画）
+    await fetchInventoryFromGAS();
+
     renderCalendar();
     renderTodayStock();
     initStickyCTA();
