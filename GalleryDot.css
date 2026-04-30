@@ -311,6 +311,9 @@ ul, ol { list-style: none; }
   font-size: 14px;
   padding: 14px 36px;
   letter-spacing: 0.04em;
+  line-height: 1.7;
+  flex-direction: column;
+  gap: 2px;
 }
 .btn-outline:hover {
   background: var(--aqua-10);
@@ -1045,6 +1048,8 @@ ul, ol { list-style: none; }
   max-width: 800px;
   position: relative;
   padding-left: 88px;
+  padding-right: 32px;
+  margin-left: 24px;
   margin-bottom: 40px;
 }
 .timeline::before {
@@ -1360,6 +1365,19 @@ ul, ol { list-style: none; }
   color: var(--slate);
   letter-spacing: 0.08em;
   transition: color 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.footer-sns-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  opacity: 0.75;
+  transition: opacity 0.2s ease;
+}
+.footer-sns a:hover .footer-sns-icon {
+  opacity: 1;
 }
 .footer-sns a:hover { color: var(--mist-white); }
 .footer-contact {
